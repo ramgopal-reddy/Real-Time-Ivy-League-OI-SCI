@@ -4,37 +4,33 @@ import requests
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
-import google.generativeai as genai
-from dotenv import load_dotenv
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
+from google import genai
 
 from database import SessionLocal, engine
 from models import Base, Opportunity
 
 # -------------------------
-# Load environment variables
+# Load environment
 # -------------------------
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+# -------------------------
+# Gemini Setup (NEW SDK)
+# -------------------------
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # -------------------------
 # FastAPI App
 # -------------------------
 app = FastAPI()
 
-Base.metadata.create_all(bind=engine)
-
 # -------------------------
-# Ivy League Opportunity URLs
-# (Replace with real opportunity pages)
+# University URLs (Use real ones)
 # -------------------------
 UNIVERSITY_SITES = {
     "Harvard": "https://careers.harvard.edu/jobs",
-    "Yale": "https://your-yale-opportunity-url",
-    "Princeton": "https://your-princeton-url",
 }
 
 # -------------------------
@@ -63,8 +59,17 @@ def analyze_with_gemini(text: str):
     """
 
     try:
-        response = model.generate_content(prompt)
-        return json.loads(response.text)
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt,
+        )
+
+        cleaned = response.text.strip()
+
+        print("Gemini raw response:", cleaned)
+
+        return json.loads(cleaned)
+
     except Exception as e:
         print("Gemini Error:", e)
         return None
@@ -75,57 +80,94 @@ def analyze_with_gemini(text: str):
 # -------------------------
 def scrape_universities():
 
+    print("Starting scrape job...")
+
     db: Session = SessionLocal()
 
     for university, url in UNIVERSITY_SITES.items():
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=15)
             soup = BeautifulSoup(response.text, "html.parser")
 
-            # Example generic selector
-            cards = soup.find_all("div")
+            # IMPORTANT: Adjust selector per site
+            job_cards = soup.find_all("a")  # more realistic than generic div
 
-            for card in cards[:5]:  # Limit to prevent overload
-                raw_text = card.get_text(separator=" ", strip=True)
+            for card in job_cards[:10]:
 
-                if len(raw_text) < 50:
+                raw_text = card.get_text(strip=True)
+
+                if not raw_text or len(raw_text) < 20:
                     continue
+
+                print("Raw scraped:", raw_text)
 
                 structured = analyze_with_gemini(raw_text)
 
-                if structured:
+                if not structured:
+                    continue
 
-                    exists = db.query(Opportunity).filter(
-                        Opportunity.title == structured.get("title"),
-                        Opportunity.university == structured.get("university")
-                    ).first()
+                title = structured.get("title")
 
-                    if not exists:
-                        new_opp = Opportunity(
-                            title=structured.get("title"),
-                            university=structured.get("university") or university,
-                            domain=structured.get("domain"),
-                            sub_domain=structured.get("sub_domain"),
-                            deadline=structured.get("deadline"),
-                            eligibility=structured.get("eligibility"),
-                            skills_required=",".join(structured.get("skills_required", [])),
-                            application_link=structured.get("application_link"),
-                        )
-                        db.add(new_opp)
-                        db.commit()
+                if not title:
+                    continue
+
+                exists = db.query(Opportunity).filter(
+                    Opportunity.title == title
+                ).first()
+
+                if exists:
+                    continue
+
+                new_opp = Opportunity(
+                    title=title,
+                    university=structured.get("university") or university,
+                    domain=structured.get("domain"),
+                    sub_domain=structured.get("sub_domain"),
+                    deadline=structured.get("deadline"),
+                    eligibility=structured.get("eligibility"),
+                    skills_required=",".join(structured.get("skills_required", [])),
+                    application_link=structured.get("application_link"),
+                )
+
+                db.add(new_opp)
+                db.commit()
+
+                print("Inserted:", title)
 
         except Exception as e:
             print(f"Error scraping {university}: {e}")
 
     db.close()
 
+    print("Scrape job completed.")
+
 
 # -------------------------
-# Scheduler (Every 1 Hour)
+# Scheduler Setup
 # -------------------------
 scheduler = BackgroundScheduler()
-scheduler.add_job(scrape_universities, "interval", hours=1)
-scheduler.start()
+
+def start_scheduler():
+    scheduler.add_job(scrape_universities, "interval", hours=1)
+    scheduler.start()
+    print("Scheduler started.")
+
+
+# -------------------------
+# Startup Event
+# -------------------------
+@app.on_event("startup")
+def startup():
+
+    print("Connecting to database...")
+
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("Database ready.")
+    except Exception as e:
+        print("Database error:", e)
+
+    start_scheduler()
 
 
 # -------------------------
@@ -135,10 +177,16 @@ scheduler.start()
 def root():
     return {"status": "Ivy League Opportunity System Running"}
 
+
+@app.get("/scrape-now")
+def scrape_now():
+    scrape_universities()
+    return {"message": "Scraping executed successfully"}
+
+
 @app.get("/opportunities")
 def get_opportunities():
     db = SessionLocal()
     data = db.query(Opportunity).all()
     db.close()
-
     return data
