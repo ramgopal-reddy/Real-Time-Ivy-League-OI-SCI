@@ -1,7 +1,6 @@
 import os
 import json
-import requests
-from bs4 import BeautifulSoup
+import feedparser
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy.orm import Session
@@ -11,39 +10,53 @@ from google import genai
 from database import SessionLocal, engine
 from models import Base, Opportunity
 
-# -------------------------
-# Load environment
-# -------------------------
 load_dotenv()
 
-# -------------------------
-# Gemini Setup (NEW SDK)
-# -------------------------
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# -------------------------
-# FastAPI App
-# -------------------------
 app = FastAPI()
 
 # -------------------------
-# University URLs (Use real ones)
+# Official RSS Feeds
 # -------------------------
-UNIVERSITY_SITES = {
-    "Harvard": "https://careers.harvard.edu/jobs",
+RSS_FEEDS = {
+    "Harvard University": "https://news.harvard.edu/gazette/feed/",
+    "Yale University": "https://news.yale.edu/news-rss",
+    "Cornell University": "https://news.cornell.edu/taxonomy/term/81/feed",
 }
 
 # -------------------------
-# Gemini Structured Extraction
+# Keyword Filter
 # -------------------------
-def analyze_with_gemini(text: str):
+OPPORTUNITY_KEYWORDS = [
+    "internship", "fellowship", "research", "conference",
+    "workshop", "grant", "scholarship", "competition",
+    "hackathon", "apply", "applications open", "summit",
+    "event", "program"
+]
+
+def is_opportunity(text: str):
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in OPPORTUNITY_KEYWORDS)
+
+# -------------------------
+# Gemini Structured Classification
+# -------------------------
+def analyze_with_gemini(title, description, link, university):
 
     prompt = f"""
-    Extract structured opportunity data in JSON format:
+    Classify and structure this academic opportunity.
+
+    Categories allowed:
+    internship, research, scholarship, fellowship,
+    competition, conference, event, general
+
+    Return JSON:
 
     {{
       "title": "",
       "university": "",
+      "category": "",
       "domain": "",
       "sub_domain": "",
       "deadline": "",
@@ -52,8 +65,12 @@ def analyze_with_gemini(text: str):
       "application_link": ""
     }}
 
-    Text:
-    {text}
+    Title: {title}
+    Description: {description}
+    Link: {link}
+    University: {university}
+
+    If this is NOT an academic opportunity, return null.
 
     Return ONLY valid JSON.
     """
@@ -64,11 +81,12 @@ def analyze_with_gemini(text: str):
             contents=prompt,
         )
 
-        cleaned = response.text.strip()
+        text = response.text.strip()
 
-        print("Gemini raw response:", cleaned)
+        if text.lower() == "null":
+            return None
 
-        return json.loads(cleaned)
+        return json.loads(text)
 
     except Exception as e:
         print("Gemini Error:", e)
@@ -76,97 +94,77 @@ def analyze_with_gemini(text: str):
 
 
 # -------------------------
-# Scraper Function
+# RSS Scraper
 # -------------------------
-def scrape_universities():
+def scrape_rss():
 
-    print("Starting scrape job...")
+    print("Starting RSS opportunity scrape...")
 
     db: Session = SessionLocal()
 
-    for university, url in UNIVERSITY_SITES.items():
-        try:
-            response = requests.get(url, timeout=15)
-            soup = BeautifulSoup(response.text, "html.parser")
+    for university, feed_url in RSS_FEEDS.items():
 
-            # IMPORTANT: Adjust selector per site
-            job_cards = soup.find_all("a")  # more realistic than generic div
+        feed = feedparser.parse(feed_url)
 
-            for card in job_cards[:10]:
+        for entry in feed.entries[:15]:
 
-                raw_text = card.get_text(strip=True)
+            title = entry.get("title", "")
+            description = entry.get("summary", "")
+            link = entry.get("link", "")
 
-                if not raw_text or len(raw_text) < 20:
-                    continue
+            combined_text = f"{title} {description}"
 
-                print("Raw scraped:", raw_text)
+            if not is_opportunity(combined_text):
+                continue
 
-                structured = analyze_with_gemini(raw_text)
+            exists = db.query(Opportunity).filter(
+                Opportunity.title == title
+            ).first()
 
-                if not structured:
-                    continue
+            if exists:
+                continue
 
-                title = structured.get("title")
+            structured = analyze_with_gemini(
+                title, description, link, university
+            )
 
-                if not title:
-                    continue
+            if not structured:
+                continue
 
-                exists = db.query(Opportunity).filter(
-                    Opportunity.title == title
-                ).first()
+            new_opp = Opportunity(
+                title=structured.get("title"),
+                university=structured.get("university") or university,
+                category=structured.get("category"),
+                domain=structured.get("domain"),
+                sub_domain=structured.get("sub_domain"),
+                deadline=structured.get("deadline"),
+                eligibility=structured.get("eligibility"),
+                skills_required=",".join(structured.get("skills_required", [])),
+                application_link=structured.get("application_link") or link,
+            )
 
-                if exists:
-                    continue
+            db.add(new_opp)
+            db.commit()
 
-                new_opp = Opportunity(
-                    title=title,
-                    university=structured.get("university") or university,
-                    domain=structured.get("domain"),
-                    sub_domain=structured.get("sub_domain"),
-                    deadline=structured.get("deadline"),
-                    eligibility=structured.get("eligibility"),
-                    skills_required=",".join(structured.get("skills_required", [])),
-                    application_link=structured.get("application_link"),
-                )
-
-                db.add(new_opp)
-                db.commit()
-
-                print("Inserted:", title)
-
-        except Exception as e:
-            print(f"Error scraping {university}: {e}")
+            print("Inserted:", structured.get("title"))
 
     db.close()
-
-    print("Scrape job completed.")
+    print("RSS opportunity scrape completed.")
 
 
 # -------------------------
-# Scheduler Setup
+# Scheduler
 # -------------------------
 scheduler = BackgroundScheduler()
 
 def start_scheduler():
-    scheduler.add_job(scrape_universities, "interval", hours=1)
+    scheduler.add_job(scrape_rss, "interval", hours=1)
     scheduler.start()
-    print("Scheduler started.")
 
 
-# -------------------------
-# Startup Event
-# -------------------------
 @app.on_event("startup")
 def startup():
-
-    print("Connecting to database...")
-
-    try:
-        Base.metadata.create_all(bind=engine)
-        print("Database ready.")
-    except Exception as e:
-        print("Database error:", e)
-
+    Base.metadata.create_all(bind=engine)
     start_scheduler()
 
 
@@ -175,14 +173,12 @@ def startup():
 # -------------------------
 @app.get("/")
 def root():
-    return {"status": "Ivy League Opportunity System Running"}
-
+    return {"status": "Ivy League Opportunity Intelligence Running"}
 
 @app.get("/scrape-now")
 def scrape_now():
-    scrape_universities()
-    return {"message": "Scraping executed successfully"}
-
+    scrape_rss()
+    return {"message": "RSS scraping executed successfully"}
 
 @app.get("/opportunities")
 def get_opportunities():
