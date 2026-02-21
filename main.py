@@ -1,5 +1,7 @@
 import os
 import json
+import time
+import re
 import feedparser
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -10,24 +12,27 @@ from google import genai
 from database import SessionLocal, engine
 from models import Base, Opportunity
 
+# =============================
+# ENV SETUP
+# =============================
 load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = FastAPI()
 
-# -------------------------
-# Official RSS Feeds
-# -------------------------
+# =============================
+# RSS FEEDS (Official Only)
+# =============================
 RSS_FEEDS = {
     "Harvard University": "https://news.harvard.edu/gazette/feed/",
     "Yale University": "https://news.yale.edu/news-rss",
     "Cornell University": "https://news.cornell.edu/taxonomy/term/81/feed",
 }
 
-# -------------------------
-# Keyword Filter
-# -------------------------
+# =============================
+# KEYWORDS FILTER
+# =============================
 OPPORTUNITY_KEYWORDS = [
     "internship", "fellowship", "research", "conference",
     "workshop", "grant", "scholarship", "competition",
@@ -36,33 +41,57 @@ OPPORTUNITY_KEYWORDS = [
 ]
 
 def is_opportunity(text: str):
-    text_lower = text.lower()
-    return any(keyword in text_lower for keyword in OPPORTUNITY_KEYWORDS)
+    text = text.lower()
+    return any(keyword in text for keyword in OPPORTUNITY_KEYWORDS)
 
-# -------------------------
-# Gemini Structured Classification
-# -------------------------
+# =============================
+# SIMPLE RULE CATEGORY
+# =============================
+def classify_category(text):
+    text = text.lower()
+
+    if "internship" in text:
+        return "internship"
+    if "fellowship" in text:
+        return "fellowship"
+    if "research" in text:
+        return "research"
+    if "scholarship" in text:
+        return "scholarship"
+    if "conference" in text:
+        return "conference"
+    if "competition" in text:
+        return "competition"
+    if "event" in text or "workshop" in text:
+        return "event"
+
+    return "general"
+
+# =============================
+# GEMINI CONFIG
+# =============================
+GEMINI_CALL_LIMIT = 5
+gemini_calls_made = 0
+
 def analyze_with_gemini(title, description, link, university):
 
+    global gemini_calls_made
+
+    if gemini_calls_made >= GEMINI_CALL_LIMIT:
+        print("Gemini call limit reached for this scrape.")
+        return None
+
     prompt = f"""
-    Classify and structure this academic opportunity.
+    Extract structured academic opportunity details.
 
-    Categories allowed:
-    internship, research, scholarship, fellowship,
-    competition, conference, event, general
-
-    Return JSON:
+    Return JSON only:
 
     {{
-      "title": "",
-      "university": "",
-      "category": "",
       "domain": "",
       "sub_domain": "",
       "deadline": "",
       "eligibility": "",
-      "skills_required": [],
-      "application_link": ""
+      "skills_required": []
     }}
 
     Title: {title}
@@ -70,9 +99,7 @@ def analyze_with_gemini(title, description, link, university):
     Link: {link}
     University: {university}
 
-    If this is NOT an academic opportunity, return null.
-
-    Return ONLY valid JSON.
+    If not enough information, return empty fields.
     """
 
     try:
@@ -81,22 +108,33 @@ def analyze_with_gemini(title, description, link, university):
             contents=prompt,
         )
 
-        text = response.text.strip()
+        gemini_calls_made += 1
 
-        if text.lower() == "null":
-            return None
+        text = response.text.strip()
 
         return json.loads(text)
 
     except Exception as e:
         print("Gemini Error:", e)
+        time.sleep(5)
         return None
 
+# =============================
+# DEADLINE REGEX
+# =============================
+def extract_deadline(text):
+    match = re.search(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}", text)
+    if match:
+        return match.group(0)
+    return None
 
-# -------------------------
-# RSS Scraper
-# -------------------------
+# =============================
+# RSS SCRAPER
+# =============================
 def scrape_rss():
+
+    global gemini_calls_made
+    gemini_calls_made = 0
 
     print("Starting RSS opportunity scrape...")
 
@@ -112,9 +150,9 @@ def scrape_rss():
             description = entry.get("summary", "")
             link = entry.get("link", "")
 
-            combined_text = f"{title} {description}"
+            combined = f"{title} {description}"
 
-            if not is_opportunity(combined_text):
+            if not is_opportunity(combined):
                 continue
 
             exists = db.query(Opportunity).filter(
@@ -124,53 +162,59 @@ def scrape_rss():
             if exists:
                 continue
 
+            category = classify_category(combined)
+            deadline = extract_deadline(combined)
+
             structured = analyze_with_gemini(
                 title, description, link, university
             )
 
-            if not structured:
-                continue
+            if structured is None:
+                structured = {
+                    "domain": "General",
+                    "sub_domain": "General",
+                    "deadline": deadline,
+                    "eligibility": None,
+                    "skills_required": []
+                }
 
             new_opp = Opportunity(
-                title=structured.get("title"),
-                university=structured.get("university") or university,
-                category=structured.get("category"),
+                title=title,
+                university=university,
+                category=category,
                 domain=structured.get("domain"),
                 sub_domain=structured.get("sub_domain"),
-                deadline=structured.get("deadline"),
+                deadline=structured.get("deadline") or deadline,
                 eligibility=structured.get("eligibility"),
                 skills_required=",".join(structured.get("skills_required", [])),
-                application_link=structured.get("application_link") or link,
+                application_link=link,
             )
 
             db.add(new_opp)
             db.commit()
 
-            print("Inserted:", structured.get("title"))
+            print("Inserted:", title)
 
     db.close()
     print("RSS opportunity scrape completed.")
 
-
-# -------------------------
-# Scheduler
-# -------------------------
+# =============================
+# SCHEDULER
+# =============================
 scheduler = BackgroundScheduler()
 
 def start_scheduler():
     scheduler.add_job(scrape_rss, "interval", hours=1)
     scheduler.start()
 
-
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
     start_scheduler()
 
-
-# -------------------------
-# API Routes
-# -------------------------
+# =============================
+# ROUTES
+# =============================
 @app.get("/")
 def root():
     return {"status": "Ivy League Opportunity Intelligence Running"}
