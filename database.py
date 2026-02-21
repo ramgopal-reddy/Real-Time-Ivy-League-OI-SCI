@@ -4,13 +4,13 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Important for Render SSL
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://")
 
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
+    connect_args={"sslmode": "require"},
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
