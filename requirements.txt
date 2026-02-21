@@ -2,9 +2,9 @@ fastapi
 uvicorn
 sqlalchemy
 psycopg2-binary
-requests
-beautifulsoup4
 apscheduler
 python-dotenv
 google-genai
 feedparser
+requests
+beautifulsoup4
