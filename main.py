@@ -42,7 +42,22 @@ OPPORTUNITY_KEYWORDS = [
 
 def is_opportunity(text: str):
     text = text.lower()
-    return any(keyword in text for keyword in OPPORTUNITY_KEYWORDS)
+
+    APPLICATION_KEYWORDS = [
+        "applications open",
+        "apply now",
+        "call for applications",
+        "deadline",
+        "submit application",
+        "open for applications",
+        "now accepting applications",
+        "register now"
+    ]
+
+    return any(keyword in text for keyword in APPLICATION_KEYWORDS)
+
+
+
 
 # =============================
 # SIMPLE RULE CATEGORY
