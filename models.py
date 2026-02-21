@@ -7,6 +7,7 @@ class Opportunity(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
     university = Column(String, index=True)
+    category = Column(String)   # NEW
     domain = Column(String)
     sub_domain = Column(String)
     deadline = Column(String)
