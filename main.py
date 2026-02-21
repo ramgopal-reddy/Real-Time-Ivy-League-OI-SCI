@@ -77,7 +77,7 @@ def analyze_with_gemini(title, description, link, university):
 
     try:
         response = client.models.generate_content(
-            model="gemini-1.5-pro-latest",
+            model="gemini-2.5-flash",
             contents=prompt,
         )
 
