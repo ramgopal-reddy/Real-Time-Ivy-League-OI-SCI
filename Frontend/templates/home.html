@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+
+{% block title %}Home - Ivy League Opportunities{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 mx-auto text-center">
+        <h1 class="display-4 mb-4">Welcome to Ivy League Opportunities</h1>
+        <p class="lead mb-4">Discover exclusive academic opportunities from Ivy League universities</p>
+        
+        <div class="row mt-5">
+            <div class="col-md-4 mb-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">🎓 Research</h5>
+                        <p class="card-text">Find research positions and fellowships</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">💼 Internships</h5>
+                        <p class="card-text">Discover internship opportunities</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">🏆 Competitions</h5>
+                        <p class="card-text">Participate in academic competitions</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% if not user.is_authenticated %}
+        <div class="mt-5">
+            <a href="{% url 'register' %}" class="btn btn-primary btn-lg me-3">Get Started</a>
+            <a href="{% url 'login' %}" class="btn btn-outline-primary btn-lg">Login</a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+
+{% block title %}All Opportunities - {{ student.user.username }}{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h3>All Available Opportunities</h3>
+                <p class="mb-0 text-muted">Total Opportunities: {{ total_count }}</p>
+            </div>
+        </div>
+
+        {% if opportunities %}
+            {% for opp in opportunities %}
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">{{ opp.title }}</h5>
+                    <p class="text-muted mb-2">
+                        <strong>University:</strong> {{ opp.university }} | 
+                        <strong>Category:</strong> {{ opp.category|title }} |
+                        <strong>Domain:</strong> {{ opp.domain|default:"General" }}
+                        {% if opp.sub_domain %}| <strong>Sub-domain:</strong> {{ opp.sub_domain }}{% endif %}
+                    </p>
+                    {% if opp.deadline %}
+                    <p class="mb-2"><strong>Deadline:</strong> {{ opp.deadline }}</p>
+                    {% endif %}
+                    {% if opp.eligibility %}
+                    <p class="mb-2"><strong>Eligibility:</strong> {{ opp.eligibility }}</p>
+                    {% endif %}
+                    {% if opp.skills_required %}
+                    <p class="mb-3"><strong>Skills Required:</strong> {{ opp.skills_required }}</p>
+                    {% endif %}
+                    {% if opp.application_link %}
+                    <a href="{{ opp.application_link }}" target="_blank" class="btn btn-primary btn-sm">Apply Now</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="card">
+                <div class="card-body text-center py-5">
+                    <h4>No Opportunities Found</h4>
+                    <p class="text-muted">No opportunities available at the moment. Check back later!</p>
+                    <a href="{% url 'dashboard' %}" class="btn btn-primary">Back to Dashboard</a>
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
