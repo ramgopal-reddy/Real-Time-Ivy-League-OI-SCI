@@ -3,6 +3,7 @@ from django.contrib.auth import login, authenticate
 from django.contrib.auth.models import User
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.conf import settings
 import requests
 from .models import Student
 
@@ -49,7 +50,7 @@ def dashboard(request):
     try:
         student = request.user.student
         # Get opportunities from backend API
-        response = requests.get('https://real-time-ivy-league-oi-sci.onrender.com/opportunities')
+        response = requests.get(f'{settings.BACKEND_URL}/opportunities')
         if response.status_code == 200:
             all_opportunities = response.json()
             # Filter opportunities based on student's domain
@@ -82,7 +83,7 @@ def all_opportunities_unfiltered(request):
     try:
         student = request.user.student
         # Get all opportunities from backend API without filtering
-        response = requests.get('https://real-time-ivy-league-oi-sci.onrender.com/opportunities')
+        response = requests.get(f'{settings.BACKEND_URL}/opportunities')
         if response.status_code == 200:
             all_opportunities = response.json()
             
@@ -108,7 +109,7 @@ def all_opportunities(request):
     try:
         student = request.user.student
         # Get opportunities from backend API
-        response = requests.get('https://real-time-ivy-league-oi-sci.onrender.com/opportunities')
+        response = requests.get(f'{settings.BACKEND_URL}/opportunities')
         if response.status_code == 200:
             all_opportunities = response.json()
             # Filter opportunities based on student's domain
